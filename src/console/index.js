@@ -13,11 +13,9 @@ const ws = new WebSocket('ws://' + window.location.host + '/ws/' + sessionId);
 function resize() {
     fit.fit();
     if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-            type: 'resize',
-            cols: xterm.cols,
-            rows: xterm.rows
-        }));
+        const size = {cols: xterm.cols, rows: xterm.rows};
+        const blob = new Blob([JSON.stringify(size)], {type : "application/json"});
+        ws.send(blob);
     }
 }
 
@@ -25,6 +23,7 @@ ws.onopen = () => {
     console.log('WebSocket connected');
     xterm.loadAddon(new AttachAddon(ws));
     xterm.open(document.getElementById('terminal'));
+    fit.activate(xterm);
     xterm.focus();
     resize();
 };

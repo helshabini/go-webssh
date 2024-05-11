@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 )
@@ -19,6 +21,19 @@ type WebSshOptions struct {
 type WebSshClient struct {
 	// The websocket client
 	Connection *websocket.Conn
-	// The SSH session
+	// The SSH client
 	Client *ssh.Client
+	// The SSH session
+	Session *ssh.Session
+	// Session Writer
+	Writer io.WriteCloser
+	// Session Reader
+	Reader io.Reader
+	// Done channel
+	Done chan struct{}
+}
+
+type Resize struct {
+	Width  int `json:"cols"`
+	Height int `json:"rows"`
 }

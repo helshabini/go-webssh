@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -16,7 +17,10 @@ import (
 )
 
 var addr = flag.String("addr", "localhost:8080", "http service address")
-var upgrader = websocket.Upgrader{} // use default options
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  2048,
+	WriteBufferSize: 2048,
+}
 var connections = make(map[string]*WebSshClient)
 
 func main() {
@@ -121,7 +125,7 @@ func create(e echo.Context) error {
 	sessionId := shortid.MustGenerate()
 	connections[sessionId] = &WebSshClient{Connection: nil, Client: client}
 
-	e.Redirect(302, "/console/index.html?"+sessionId)
+	e.Redirect(302, "/console/index.html?id="+sessionId)
 	return nil
 }
 
@@ -154,24 +158,102 @@ func ws(e echo.Context) error {
 	}
 	defer session.Close()
 
-	session.Stdout = c.NetConn()
-	session.Stderr = c.NetConn()
+	webssh.Session = session
 
-	// TODO: Figure our concurrency for StdOut, StdErr, and StdIn
-
-	for {
-		mt, message, err := c.ReadMessage()
-		if err != nil {
-			slog.Error("Read message failed", "Error", err)
-			break
-		}
-		slog.Info("Message received", "RemoteAddr", c.RemoteAddr, "Message", message, "Type", mt)
-		err = c.WriteMessage(mt, message)
-		if err != nil {
-			slog.Error("Write message failed", "Error", err)
-			break
-		}
+	webssh.Reader, err = session.StdoutPipe()
+	if err != nil {
+		slog.Error("Failed to assign SSH session's stdout pipe", "Error", err)
+		return err
 	}
 
+	webssh.Writer, err = session.StdinPipe()
+	if err != nil {
+		slog.Error("Failed to assign SSH session's stdin pipe", "Error", err)
+		return err
+	}
+	defer webssh.Writer.Close()
+
+	session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	})
+
+	if err := session.Shell(); err != nil {
+		slog.Error("Failed to start shell", "Error", err)
+		return err
+	}
+
+	// Read from session and write to socket routine
+	go ReadSessionWriteSocket(webssh)
+
+	// Read from socket and write to session routine
+	go ReadSocketWriteSession(webssh)
+
+	<-webssh.Done
+
+	connections[sessionId] = nil
+
 	return nil
+}
+
+func ReadSessionWriteSocket(webssh *WebSshClient) error {
+	defer func() {
+		webssh.Done <- struct{}{}
+	}()
+
+	data := make([]byte, 2048)
+
+	for {
+		// Reading from the SSH session
+		n, err := webssh.Reader.Read(data)
+		if err != nil {
+			slog.Error("Read failed", "Error", err)
+			return err
+		}
+		if n > 0 {
+			// Writing to the WebSocket
+			webssh.Connection.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := webssh.Connection.WriteMessage(websocket.TextMessage, data[:n]); err != nil {
+				slog.Error("Write control failed", "Error", err)
+				return err
+			}
+		}
+	}
+}
+
+func ReadSocketWriteSession(webssh *WebSshClient) error {
+	defer func() {
+		webssh.Done <- struct{}{}
+	}()
+
+	for {
+		msgtype, msg, err := webssh.Connection.ReadMessage()
+		if err != nil {
+			slog.Error("Failed to read from socket reader", "Error", err)
+			continue
+		}
+		if msgtype == websocket.CloseMessage {
+			slog.Info("Received close message from client")
+			return nil
+		}
+		if msgtype == websocket.BinaryMessage {
+			newsize := &Resize{}
+			if err := json.Unmarshal(msg, newsize); err != nil {
+				slog.Error("Failed to unmarshal window size. Ignoring the incoming data", "Error", err)
+			}
+			if err := webssh.Session.WindowChange(newsize.Height*8, newsize.Width*8); err != nil {
+				slog.Error("Failed to change window size", "Error", err)
+				return err
+			}
+			continue
+		}
+		if msgtype == websocket.TextMessage {
+			if _, err := webssh.Writer.Write(msg); err != nil {
+				slog.Error("Failed to write to session writer", "Error", err)
+				return err
+			}
+			continue
+		}
+	}
 }
