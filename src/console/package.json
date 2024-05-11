@@ -1,0 +1,18 @@
+{
+  "main": "index.js",
+  "scripts": {
+    "build": "webpack --config ./webpack.config.js"
+  },
+  "dependencies": {
+    "@xterm/addon-attach": "^0.11.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.10.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.25.4",
+    "webpack": "^5.91.0",
+    "webpack-cli": "^5.1.4"
+  }
+}

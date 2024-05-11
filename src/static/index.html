@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>New SSH Session</title>
+    <link rel="stylesheet" type="text/css" href="./css/bootstrap.min.css"/>
+    <script type="text/javascript" src="./js/bootstrap.bundle.min.js"></script>
+    <style>
+        #mainform {
+            min-width: 600px;
+            max-width: 800px;
+        }
+        #port {
+            max-width: 100px;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">SSH Web Client</a>
+        </div>
+    </nav>
+    <br>
+    <div class="py-5 text-center">
+        <h2>Create New SSH Connection</h2>
+    </div>
+    <div class="container form-container" id="mainform">
+        <form class="p-4 p-md-5 border rounded-3 bg-body-tertiary" id="connect" action="/create" method="post" enctype="multipart/form-data">
+            <h4 class="mb-3">Connection</h4>
+            <div class="row">
+                <div class="col">
+                    <label for="username">Username</label>
+                    <input class="form-control" type="text" id="username" name="username" placeholder="admin" required>
+                </div>
+                <div class="col-auto">
+                    <span>&nbsp;</span>
+                    <br>
+                    <span class="align-middle">@</span>
+                </div>
+                <div class="col">
+                    <label for="hostname">Hostname</label>
+                    <input class="form-control" type="text" id="hostname" name="hostname" placeholder="localhost" required>
+                </div>
+                <div class="col-auto">
+                    <label for="Port">Port</label>
+                    <input class="form-control placeholder-lg" type="number" id="port" name="port" placeholder="22" min=1 max=65535>
+                </div>
+            </div>
+            <hr class="my-4">
+            <h4 class="mb-3">Authentication</h4>
+            <div class="form-check">
+                <input id="optpass" name="authentication" type="radio" class="form-check-input" checked="checked" value="0">
+                <label class="form-check-label" for="optpass">Password</label>
+            </div>
+            <div class="row">
+                <div class="col">
+                    <label for="password" class="visually-hidden">Password</label>
+                    <input class="form-control" type="password" id="password" name="password" value="">
+                </div>
+                <div class="col">
+                    <input class="form-check-input flex-shrink-0 align-middle" type="checkbox" id="interactive" name="interactive">
+                    <label class="align-middle" for="interactive">Interactive</label>
+                </div>
+            </div>
+            <br>
+            <div class="row">
+                <div class="col">
+                    <div class="form-check">
+                        <input id="optpk" name="authentication" type="radio" class="form-check-input" value="1">
+                        <label class="form-check-label" for="optpk">Private Key</label>
+                    </div>
+                    <label class="visually-hidden" for="privatekey">Key File</label>
+                    <input class="form-control" type="file" id="privatekey" name="privatekey" value="">
+                </div>
+                <div class="col">
+                    <label for="passphrase">Passphrase</label>
+                    <input class="form-control" type="password" id="passphrase" name="passphrase" value="">
+                </div>
+            </div>
+            <hr class="my-4">
+            <button type="submit" class="btn btn-primary">Connect</button>
+        </form>
+    </div>
+</body>
+
+</html>
