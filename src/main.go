@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -35,12 +36,12 @@ func main() {
 		HandleError: true, // forwards error to the global error handler, so it can decide appropriate status code
 		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
 			if v.Error == nil {
-				slog.LogAttrs(context.Background(), slog.LevelInfo, "REQUEST",
+				slog.LogAttrs(context.Background(), slog.LevelInfo, "Request",
 					slog.String("uri", v.URI),
 					slog.Int("status", v.Status),
 				)
 			} else {
-				slog.LogAttrs(context.Background(), slog.LevelError, "REQUEST_ERROR",
+				slog.LogAttrs(context.Background(), slog.LevelError, "Request Error",
 					slog.String("uri", v.URI),
 					slog.Int("status", v.Status),
 					slog.String("err", v.Error.Error()),
@@ -69,18 +70,22 @@ func create(e echo.Context) error {
 	slog.Info("Create request", "Options", options)
 
 	if options.Hostname == "" {
-		return e.String(400, "Hostname is required")
+		e.String(http.StatusBadRequest, "Hostname is required")
+		return nil
 	}
 	if options.Port == "" {
 		options.Port = "22"
 	}
 	if options.Username == "" {
-		return e.String(400, "Username is required")
+		e.String(http.StatusBadRequest, "Username is required")
+		return nil
 	}
 	if options.Authentication == "0" && options.Password == "" {
-		return e.String(400, "Password is required")
+		e.String(http.StatusBadRequest, "Password is required")
+		return nil
 	} else if options.Authentication == "1" && (options.PrivateKey == "" || options.Passphrase == "") {
-		return e.String(400, "Private key & passphrase are required")
+		e.String(http.StatusBadRequest, "Private key & passphrase are required")
+		return nil
 	}
 
 	var method ssh.AuthMethod
@@ -100,10 +105,12 @@ func create(e echo.Context) error {
 			})
 		}
 	case "1":
-		return e.String(400, "Public key authentication is not supported yet")
+		e.String(http.StatusNotImplemented, "Public key authentication is not supported yet")
+		return nil
 
 	default:
-		return e.String(400, "Invalid authentication method")
+		e.String(http.StatusBadRequest, "Invalid authentication method")
+		return nil
 	}
 
 	client, err := ssh.Dial("tcp", fmt.Sprintf("%s:%s", options.Hostname, options.Port), &ssh.ClientConfig{
@@ -119,13 +126,16 @@ func create(e echo.Context) error {
 	})
 	if err != nil {
 		slog.Error("SSH dial failed", "Error", err)
-		return e.String(500, "SSH dial failed")
+		e.String(http.StatusInternalServerError, "SSH dial failed")
+		return nil
 	}
 
 	sessionId := shortid.MustGenerate()
-	connections[sessionId] = &WebSshClient{Connection: nil, Client: client}
+	webssh := NewWebSshClient()
+	webssh.Client = client
+	connections[sessionId] = webssh
 
-	e.Redirect(302, "/console/index.html?id="+sessionId)
+	e.Redirect(http.StatusFound, "/console/index.html?id="+sessionId)
 	return nil
 }
 
@@ -133,20 +143,23 @@ func ws(e echo.Context) error {
 	sessionId := e.Param("sessionId")
 	if sessionId == "" {
 		slog.Error("Session ID is required")
-		return e.String(400, "Session ID is required")
+		e.String(http.StatusBadRequest, "Session ID is required")
+		return nil
 	}
-	c, err := upgrader.Upgrade(e.Response().Writer, e.Request(), nil)
-	if err != nil {
-		slog.Error("Upgrade failed", "Error", err)
-		return err
-	}
-	defer c.Close()
 
 	webssh := connections[sessionId]
 	if webssh == nil {
-		slog.Error("WebSSH client not found", "sessionId", sessionId)
-		return e.String(400, "WebSSH client not found")
+		e.String(http.StatusNotFound, "WebSSH client not found")
+		return nil
 	}
+
+	c, err := upgrader.Upgrade(e.Response().Writer, e.Request(), nil)
+	if err != nil {
+		e.String(http.StatusInternalServerError, "Failed to upgrade connection")
+		return nil
+	}
+	defer c.Close()
+
 	webssh.Connection = c
 
 	defer webssh.Client.Close()
@@ -154,8 +167,10 @@ func ws(e echo.Context) error {
 	session, err := webssh.Client.NewSession()
 	if err != nil {
 		slog.Error("Create session failed", "Error", err)
-		return e.String(500, "Create session failed")
+		e.String(http.StatusInternalServerError, "Create session failed")
+		return nil
 	}
+
 	defer session.Close()
 
 	webssh.Session = session
@@ -163,34 +178,55 @@ func ws(e echo.Context) error {
 	webssh.Reader, err = session.StdoutPipe()
 	if err != nil {
 		slog.Error("Failed to assign SSH session's stdout pipe", "Error", err)
-		return err
+		e.String(http.StatusInternalServerError, "Failed to assign SSH session's stdout pipe")
+		return nil
 	}
 
 	webssh.Writer, err = session.StdinPipe()
 	if err != nil {
 		slog.Error("Failed to assign SSH session's stdin pipe", "Error", err)
-		return err
+		e.String(http.StatusInternalServerError, "Failed to assign SSH session's stdin pipe")
+		return nil
 	}
 	defer webssh.Writer.Close()
 
-	session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
+	if err := session.RequestPty("xterm", 40, 80, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
-	})
+	}); err != nil {
+		slog.Error("Failed to request pty", "Error", err)
+		e.String(http.StatusInternalServerError, "Failed to request pty")
+		return nil
+	}
 
 	if err := session.Shell(); err != nil {
 		slog.Error("Failed to start shell", "Error", err)
-		return err
+		e.String(http.StatusInternalServerError, "Failed to start shell")
+		return nil
 	}
 
 	// Read from session and write to socket routine
-	go ReadSessionWriteSocket(webssh)
+	go func() {
+		if err := ReadSessionWriteSocket(webssh); err != nil {
+			if webssh.Done == nil {
+				slog.Error("Read session terminated with error", "Error", err)
+			}
+		}
+	}()
 
 	// Read from socket and write to session routine
-	go ReadSocketWriteSession(webssh)
+	go func() {
+		if err := ReadSocketWriteSession(webssh); err != nil {
+			if webssh.Done == nil {
+				slog.Error("Read socket terminated with error", "Error", err)
+			}
+		}
+	}()
 
 	<-webssh.Done
+
+	slog.Info("Session done", "sessionId", sessionId)
 
 	connections[sessionId] = nil
 
@@ -208,6 +244,9 @@ func ReadSessionWriteSocket(webssh *WebSshClient) error {
 		// Reading from the SSH session
 		n, err := webssh.Reader.Read(data)
 		if err != nil {
+			if err.Error() == "EOF" {
+				return nil
+			}
 			slog.Error("Read failed", "Error", err)
 			return err
 		}
@@ -230,8 +269,11 @@ func ReadSocketWriteSession(webssh *WebSshClient) error {
 	for {
 		msgtype, msg, err := webssh.Connection.ReadMessage()
 		if err != nil {
-			slog.Error("Failed to read from socket reader", "Error", err)
-			continue
+			if webssh.Done == nil {
+				slog.Error("Failed to read from socket reader", "Error", err)
+				return err
+			}
+			return nil
 		}
 		if msgtype == websocket.CloseMessage {
 			slog.Info("Received close message from client")
@@ -240,9 +282,8 @@ func ReadSocketWriteSession(webssh *WebSshClient) error {
 		if msgtype == websocket.BinaryMessage {
 			newsize := &Resize{}
 			if err := json.Unmarshal(msg, newsize); err != nil {
-				slog.Error("Failed to unmarshal window size. Ignoring the incoming data", "Error", err)
-			}
-			if err := webssh.Session.WindowChange(newsize.Height*8, newsize.Width*8); err != nil {
+				slog.Warn("Failed to unmarshal window size. Ignoring the incoming data", "Error", err)
+			} else if err := webssh.Session.WindowChange(newsize.Height*8, newsize.Width*8); err != nil {
 				slog.Error("Failed to change window size", "Error", err)
 				return err
 			}
@@ -250,6 +291,9 @@ func ReadSocketWriteSession(webssh *WebSshClient) error {
 		}
 		if msgtype == websocket.TextMessage {
 			if _, err := webssh.Writer.Write(msg); err != nil {
+				if err.Error() == "EOF" {
+					return nil
+				}
 				slog.Error("Failed to write to session writer", "Error", err)
 				return err
 			}

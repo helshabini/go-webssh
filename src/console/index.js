@@ -13,8 +13,8 @@ const ws = new WebSocket('ws://' + window.location.host + '/ws/' + sessionId);
 function resize() {
     fit.fit();
     if (ws.readyState === WebSocket.OPEN) {
-        const size = {cols: xterm.cols, rows: xterm.rows};
-        const blob = new Blob([JSON.stringify(size)], {type : "application/json"});
+        const size = { cols: xterm.cols, rows: xterm.rows };
+        const blob = new Blob([JSON.stringify(size)], { type: "application/json" });
         ws.send(blob);
     }
 }
@@ -30,15 +30,11 @@ ws.onopen = () => {
 
 ws.onclose = () => {
     console.log('WebSocket closed');
+    xterm.writeln('Connection closed');
 }
 
 ws.onerror = (error) => {
     console.error('WebSocket error:', error);
 }
 
-ws.onmessage = (event) => {
-    console.log('WebSocket message:', event.data);
-}
-
 window.addEventListener('resize', resize);
-

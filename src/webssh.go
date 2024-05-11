@@ -33,6 +33,17 @@ type WebSshClient struct {
 	Done chan struct{}
 }
 
+func NewWebSshClient() *WebSshClient {
+	return &WebSshClient{
+		Connection: nil,
+		Client:     nil,
+		Session:    nil,
+		Writer:     nil,
+		Reader:     nil,
+		Done:       make(chan struct{}, 1),
+	}
+}
+
 type Resize struct {
 	Width  int `json:"cols"`
 	Height int `json:"rows"`
