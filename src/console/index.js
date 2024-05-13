@@ -38,3 +38,7 @@ ws.onerror = (error) => {
 }
 
 window.addEventListener('resize', resize);
+
+window.addEventListener('beforeunload', function() {
+    ws.close();
+});
